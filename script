@@ -1,0 +1,169 @@
+# Data Prep ----
+library(tidyverse)
+library(janitor)
+
+wins_2021 <- read_csv("data/wins_2021.csv")
+wins_2022 <- read_csv("data/wins_2022.csv")
+talent_composite <- read_csv("data/talent_composite.csv")
+recruiting <- read_csv("data/recruiting.csv")
+advanced_metrics <- read_csv("data/advanced_metrics.csv")
+
+# Create a list of Power 5 and Group of 5 Conferences ----
+p5 <- c("SEC", "Big Ten", "ACC", "Big 12", "Pac-12")
+g5 <- c("American Athletic", "Mountain West", "Conference USA", "Sun Belt", "Mid-American")
+independent <- "FBS Independents"
+
+# Filter down to 2021 FBS Schools ----
+conferences <- unique(advanced_metrics$Conference)
+schools <- unique(wins_2021$Team)
+year <- "2021"
+
+composite_recruiting <- recruiting %>%
+  select(-c(Points)) %>%
+  filter(Year %in% c(2017, 2018, 2019, 2020) & Team %in% schools) %>%
+  group_by(Team) %>%
+  pivot_wider(names_from = Year, 
+              values_from = Rank) %>%
+  ungroup() %>%
+  rename(`2017 Recruiting` = "2017", 
+         `2018 Recruiting` = "2018",
+         `2019 Recruiting` = "2019",
+         `2020 Recruiting` = "2020")
+
+talent <- talent_composite %>% filter(Team %in% schools)
+metrics <- advanced_metrics %>% filter(Team %in% schools) %>%
+  select(-c(Season))
+wins <- full_join(wins_2021, wins_2022, by = "Team") %>% 
+  filter(!is.na(`2021 Wins`))
+
+# Combine datasets and select relevant variables ----
+model_data_21 <- talent %>%
+  full_join(wins, by = "Team") %>%
+  full_join(composite_recruiting, by = "Team") %>%
+  full_join(metrics, by = "Team") 
+  
+# Build the regression model with just recruiting and talent composites ----
+
+# Look at variable relations
+ggplot(model_data_21, aes(x = `2021 Wins`, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "2021 Wins", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs 2021 Wins by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+  # past year wins are important
+
+ggplot(model_data_21, aes(x = Talent, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "Talent Composite", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs Talent Composite by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+
+ggplot(model_data_21, aes(x = `2017 Recruiting`, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "2017 Recruiting", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs 2017 Recruiting Rankings by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+
+ggplot(model_data_21, aes(x = `2018 Recruiting`, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "2018 Recruiting", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs 2018 Recruiting Rankings by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+
+ggplot(model_data_21, aes(x = `2019 Recruiting`, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "2019 Recruiting", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs 2019 Recruiting Rankings by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+
+ggplot(model_data_21, aes(x = `2020 Recruiting`, y = `2022 Wins`, label = Team)) +
+  geom_point(size = 3) +  # Adjust the size of points as needed
+  geom_text(check_overlap = TRUE, vjust = -1) +  # Add labels with some adjustment
+  labs(x = "2020 Recruiting", y = "2022 Wins", title = "Scatter Plot of 2022 Wins vs 2020 Recruiting Rankings by Team") +
+  theme_minimal()  # Use a minimal theme, change as desired
+
+
+# Create and run the model
+composite_metrics <- lm(`2022 Wins` ~ `2021 Wins` + Talent + `2017 Recruiting` + 
+                          `2018 Recruiting` + `2019 Recruiting` + `2020 Recruiting`, 
+                        data = model_data_21)
+summary(composite_metrics)
+
+# Create a composite score that predicts the playoff and NY6 ----
+recruiting_value <- nrow(model_data_21) + 1
+
+preseason_metrics <- model_data_21 %>%
+  select(Team, Conference, `2022 Wins`, `2021 Wins`, Talent, `2017 Recruiting`, `2018 Recruiting`, 
+         `2019 Recruiting`, `2020 Recruiting`) 
+
+preseason_metrics <- preseason_metrics %>%
+  mutate(Composite_Ranking = `2021 Wins` + Talent + (recruiting_value - `2017 Recruiting`) +
+           (recruiting_value - `2018 Recruiting`) + (recruiting_value - `2019 Recruiting`) + 
+           (recruiting_value - `2020 Recruiting`)) %>%
+  mutate(Postseason = case_when(
+    rank(-Composite_Ranking) <= 4 ~ "Playoff",  # Select the top 4 teams for playoffs
+    rank(-Composite_Ranking) > 4 & Conference %in% c(p5, independent) ~ "P5 NY6/Notre Dame",  # Select P5 NY6 teams (next best)
+    Conference %in% g5 ~ "G5 NY6",  # Select P5 NY6 teams (next best)
+    TRUE ~ NA_character_  # Any other cases are set as NA or can be adjusted as needed
+  )) 
+preseason_metrics
+
+# Playoff Matchups 
+playoff <- preseason_metrics %>%
+  filter(Postseason %in% "Playoff")
+
+# Divide playoff teams into two groups for Cotton Bowl and Orange Bowl
+cotton_bowl_teams <- head(playoff, 2)  # Select the first two playoff teams for Cotton Bowl
+orange_bowl_teams <- tail(playoff, 2)  # Select the last two playoff teams for Orange Bowl
+
+# Assign Cotton Bowl and Orange Bowl to the selected teams
+cotton_bowl_teams$Bowl_Game <- "Cotton Bowl"
+orange_bowl_teams$Bowl_Game <- "Orange Bowl"
+
+# Update postseason data frame with matchups
+playoff_updated <- rbind(cotton_bowl_teams, orange_bowl_teams)
+playoff_updated
+
+# NY6 Matchups 
+p5_ny6 <- preseason_metrics %>%
+  # Filter for P5 teams after the top 4
+  filter(Postseason == "P5 NY6/Notre Dame") %>%
+  slice(1:7)  # Select the next seven best-ranked teams from P5 conferences or Independents
+
+g5_ny6 <- preseason_metrics %>%
+  filter(Postseason == "G5 NY6") %>%
+  arrange(-Composite_Ranking) %>%
+  slice(1)  # Select the top-ranked G5 team
+
+non_playoff <- rbind(p5_ny6, g5_ny6)
+non_playoff
+
+# Allocate two teams to each designated bowl game
+rose_bowl_teams <- head(non_playoff, 2)  # First two teams for the Rose Bowl
+sugar_bowl_teams <- non_playoff[3:4, ]   # Next two teams for the Sugar Bowl
+fiesta_bowl_teams <- non_playoff[5:6, ]  # Next two teams for the Fiesta Bowl
+peach_bowl_teams <- tail(non_playoff, 2) # Last two teams for the Peach Bowl
+
+# Assign bowl game names to the selected teams
+rose_bowl_teams$Bowl_Game <- "Rose Bowl"
+sugar_bowl_teams$Bowl_Game <- "Sugar Bowl"
+fiesta_bowl_teams$Bowl_Game <- "Fiesta Bowl"
+peach_bowl_teams$Bowl_Game <- "Peach Bowl"
+
+# Combine the matchups for all bowl games
+ny6_matchups <- rbind(rose_bowl_teams, sugar_bowl_teams, fiesta_bowl_teams, peach_bowl_teams)
+ny6_matchups
+# Print out who is playing where
+all_bowls <- rbind(playoff_updated, ny6_matchups)
+
+# Assuming all_bowls contains playoff and NY6 matchups
+
+# List of unique bowl names in the dataset
+unique_bowls <- unique(all_bowls$Bowl_Game)
+
+# Loop through each unique bowl and print out the matchups
+for (bowl in unique_bowls) {
+  bowl_matchups <- all_bowls[all_bowls$Bowl_Game == bowl, "Team"]
+  teams <- paste(bowl_matchups$Team, collapse = " vs. ")
+  cat(paste(bowl, ":", teams, "\n"))
+}
